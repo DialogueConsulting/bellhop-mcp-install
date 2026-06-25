@@ -10,7 +10,7 @@
  * client's config file. No server runs locally; the clients authenticate to
  * Bellhop over OAuth on first use.
  *
- * Zero runtime dependencies — Node built-ins only, so `npx @bellhop/mcp-install`
+ * Zero runtime dependencies — Node built-ins only, so `npx @bellhop-marketing/mcp-install`
  * is fast and auditable.
  */
 
@@ -153,7 +153,7 @@ function parseArgs(argv) {
     else if (a.startsWith('--client=')) opts.clients.push(a.slice('--client='.length));
     else {
       console.error(red(`Unknown argument: ${a}`));
-      console.error(`Run ${cyan('npx @bellhop/mcp-install --help')} for usage.`);
+      console.error(`Run ${cyan('npx @bellhop-marketing/mcp-install --help')} for usage.`);
       process.exit(1);
     }
   }
@@ -164,7 +164,7 @@ function printHelp() {
   console.log(`${bold('bellhop mcp-install')} — connect the Bellhop MCP server to your AI client
 
 ${bold('Usage')}
-  npx @bellhop/mcp-install [options]
+  npx @bellhop-marketing/mcp-install [options]
 
 ${bold('Options')}
   --client <id>   Configure a specific client (repeatable).
@@ -177,10 +177,10 @@ ${bold('Options')}
   --help, -h      Show this help.
 
 ${bold('Examples')}
-  npx @bellhop/mcp-install                 # interactive — pick your clients
-  npx @bellhop/mcp-install --all --yes     # configure everything, no prompts
-  npx @bellhop/mcp-install --client cursor
-  npx @bellhop/mcp-install --print --all   # preview the config changes
+  npx @bellhop-marketing/mcp-install                 # interactive — pick your clients
+  npx @bellhop-marketing/mcp-install --all --yes     # configure everything, no prompts
+  npx @bellhop-marketing/mcp-install --client cursor
+  npx @bellhop-marketing/mcp-install --print --all   # preview the config changes
 
 Each client signs in to Bellhop over OAuth on first use — no API key to paste.`);
 }

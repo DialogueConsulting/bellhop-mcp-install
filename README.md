@@ -1,9 +1,9 @@
-# @bellhop/mcp-install
+# @bellhop-marketing/mcp-install
 
 One command to connect the **[Bellhop](https://bellhop.marketing) MCP server** to your AI client — Claude Code, Cursor, or Claude Desktop. It writes the right config entry for each client and points it at Bellhop's hosted, OAuth-authenticated MCP endpoint. There's no API key to paste: each client signs you in through the browser on first use.
 
 ```bash
-npx @bellhop/mcp-install
+npx @bellhop-marketing/mcp-install
 ```
 
 That's it — the installer detects which clients you have, asks which to set up (or use `--all`), and writes the config. Restart the client and you're connected.
@@ -25,7 +25,7 @@ Your existing MCP servers and any other config keys are preserved — the instal
 ## Usage
 
 ```bash
-npx @bellhop/mcp-install [options]
+npx @bellhop-marketing/mcp-install [options]
 ```
 
 | Option | Description |
@@ -41,10 +41,10 @@ npx @bellhop/mcp-install [options]
 ### Examples
 
 ```bash
-npx @bellhop/mcp-install                 # interactive — pick your clients
-npx @bellhop/mcp-install --all --yes     # configure everything, no prompts
-npx @bellhop/mcp-install --client cursor # just Cursor
-npx @bellhop/mcp-install --print --all   # preview the config changes first
+npx @bellhop-marketing/mcp-install                 # interactive — pick your clients
+npx @bellhop-marketing/mcp-install --all --yes     # configure everything, no prompts
+npx @bellhop-marketing/mcp-install --client cursor # just Cursor
+npx @bellhop-marketing/mcp-install --print --all   # preview the config changes first
 ```
 
 ## After installing

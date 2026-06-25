@@ -1,7 +1,7 @@
 name: publish
 
 # Publishes to npm when a GitHub Release is published.
-# Requires an NPM_TOKEN secret with publish rights to the @bellhop scope.
+# Requires an NPM_TOKEN secret with publish rights to the @bellhop-marketing scope.
 on:
   release:
     types: [published]

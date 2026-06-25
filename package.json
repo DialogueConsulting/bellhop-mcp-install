@@ -1,5 +1,5 @@
 {
-  "name": "@bellhop/mcp-install",
+  "name": "@bellhop-marketing/mcp-install",
   "version": "0.1.0",
   "description": "One command to connect the Bellhop MCP server to Claude Code, Cursor, and Claude Desktop.",
   "bin": {
