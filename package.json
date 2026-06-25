@@ -1,0 +1,38 @@
+{
+  "name": "@bellhop/mcp-install",
+  "version": "0.1.0",
+  "description": "One command to connect the Bellhop MCP server to Claude Code, Cursor, and Claude Desktop.",
+  "bin": {
+    "mcp-install": "bin/install.js"
+  },
+  "files": [
+    "bin",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "smoke": "node bin/install.js --print --all"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "bellhop",
+    "claude",
+    "claude-code",
+    "cursor",
+    "installer"
+  ],
+  "license": "MIT",
+  "author": "Dialogue Consulting Pty Ltd",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/DialogueConsulting/bellhop-mcp-install.git"
+  },
+  "homepage": "https://bellhop.marketing",
+  "bugs": {
+    "url": "https://github.com/DialogueConsulting/bellhop-mcp-install/issues"
+  }
+}
