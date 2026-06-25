@@ -12,11 +12,13 @@ That's it — the installer detects which clients you have, asks which to set up
 
 The Bellhop MCP server is a **remote, streamable-HTTP endpoint** at `https://app.bellhop.marketing/mcp`, authenticated with OAuth 2.0. This installer simply adds a `bellhop` server entry to each client's MCP config:
 
-| Client | Config file | Entry written |
+| Client | Config file | How it's registered |
 | --- | --- | --- |
-| **Claude Code** | `~/.claude.json` | `{ "type": "http", "url": "…/mcp" }` |
+| **Claude Code** | `~/.claude.json` | `claude mcp add --transport http …` when the `claude` CLI is present (falls back to writing `{ "type": "http", "url": "…/mcp" }` directly) |
 | **Cursor** | `~/.cursor/mcp.json` | `{ "url": "…/mcp" }` |
 | **Claude Desktop** | `claude_desktop_config.json` (per-OS) | `npx -y mcp-remote …/mcp` bridge |
+
+For Claude Code the installer prefers the supported `claude mcp add` path: it writes through Claude Code's own config writer (no clobbering if Claude Code is open during `npx`) and reliably arms the `/mcp` sign-in prompt. When the CLI isn't on `PATH`, it merges the JSON entry directly instead.
 
 Claude Desktop can't dial a remote MCP from its config file directly, so the installer bridges it through the standard [`mcp-remote`](https://www.npmjs.com/package/mcp-remote) proxy, which handles the OAuth flow.
 
@@ -37,6 +39,7 @@ npx @bellhop-marketing/mcp-install [options]
 | `--skills` | Also install the Bellhop skills into `~/.claude/skills` (no prompt). |
 | `--no-skills` | Skip the Bellhop skills install. |
 | `--uninstall` | Remove the Bellhop MCP entry and the `bellhop-*` skills. |
+| `--verify` | After installing, run `claude mcp get` and report whether Claude Code registered the server. |
 | `--url <url>` | Override the MCP endpoint (default `https://app.bellhop.marketing/mcp`). |
 | `--name <name>` | Override the server key written to config (default `bellhop`). |
 | `--help`, `-h` | Show help. |
@@ -74,10 +77,23 @@ Say yes (or pass `--skills`) and the skills land in `~/.claude/skills/bellhop-*`
 ## After installing
 
 1. **Restart** the client (fully quit and reopen Claude Desktop).
-2. On first use, the client opens a browser to sign in to Bellhop and grant access. In Claude Code, run `/mcp` to trigger it.
+2. **Sign in — this is the step that actually loads the tools.** Bellhop's MCP is OAuth-protected, so its tools appear **only after** you complete the browser sign-in. In Claude Code: run `/mcp`, select **bellhop**, choose **Authenticate**, and finish the browser flow. A status of *"Connected"* alone means the server is reachable, **not** that you're signed in — the tools won't show until OAuth completes.
 3. You'll choose a workspace and the scopes to grant (`read`, `write`, `admin`, `billing`) — you can grant less than your role allows.
 
 Manage or revoke authorized clients any time in **Bellhop → Settings → MCP**.
+
+## Troubleshooting
+
+**"Connected" but no Bellhop tools show up.** That means the server is reachable but you haven't signed in yet — they're two different things. Run `/mcp`, select **bellhop**, choose **Authenticate**, and complete the browser flow; the tools load right after.
+
+**`/mcp` doesn't offer an "Authenticate" action.** Reset the entry so Claude Code re-arms the prompt, then fully restart Claude Code:
+
+```bash
+claude mcp remove bellhop -s user
+claude mcp add --transport http --scope user bellhop https://app.bellhop.marketing/mcp
+```
+
+Then run `/mcp` → **bellhop** → **Authenticate**. You can also re-run the installer with `--verify` to confirm registration.
 
 ## Connect manually
 

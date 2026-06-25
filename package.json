@@ -1,6 +1,6 @@
 {
   "name": "@bellhop-marketing/mcp-install",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "One command to connect the Bellhop MCP server to Claude Code, Cursor, and Claude Desktop — and install the Bellhop skills into Claude Code.",
   "bin": {
     "mcp-install": "bin/install.js"
@@ -14,7 +14,8 @@
     "node": ">=18"
   },
   "scripts": {
-    "smoke": "node bin/install.js --print --all"
+    "smoke": "node bin/install.js --print --all",
+    "test": "node --test test/*.test.js"
   },
   "keywords": [
     "mcp",
