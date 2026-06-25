@@ -1,12 +1,12 @@
 # @bellhop-marketing/mcp-install
 
-One command to connect the **[Bellhop](https://bellhop.marketing) MCP server** to your AI client — Claude Code, Cursor, or Claude Desktop. It writes the right config entry for each client and points it at Bellhop's hosted, OAuth-authenticated MCP endpoint. There's no API key to paste: each client signs you in through the browser on first use.
+One command to connect the **[Bellhop](https://bellhop.marketing) MCP server** to your AI client — Claude Code, Cursor, or Claude Desktop — **and** install the [Bellhop skills](https://github.com/DialogueConsulting/bellhop-skills) into Claude Code. It writes the right config entry for each client and points it at Bellhop's hosted, OAuth-authenticated MCP endpoint. There's no API key to paste: each client signs you in through the browser on first use.
 
 ```bash
 npx @bellhop-marketing/mcp-install
 ```
 
-That's it — the installer detects which clients you have, asks which to set up (or use `--all`), and writes the config. Restart the client and you're connected.
+That's it — the installer detects which clients you have, asks which to set up (or use `--all`), writes the config, and offers to install the Bellhop skills. Restart the client and you're connected.
 
 ## What it does
 
@@ -34,6 +34,9 @@ npx @bellhop-marketing/mcp-install [options]
 | `--all` | Configure every supported client. |
 | `--yes`, `-y` | Non-interactive: use detected clients (or all) without prompting. |
 | `--print` | Dry run — print what would be written, change nothing. |
+| `--skills` | Also install the Bellhop skills into `~/.claude/skills` (no prompt). |
+| `--no-skills` | Skip the Bellhop skills install. |
+| `--uninstall` | Remove the Bellhop MCP entry and the `bellhop-*` skills. |
 | `--url <url>` | Override the MCP endpoint (default `https://app.bellhop.marketing/mcp`). |
 | `--name <name>` | Override the server key written to config (default `bellhop`). |
 | `--help`, `-h` | Show help. |
@@ -41,11 +44,32 @@ npx @bellhop-marketing/mcp-install [options]
 ### Examples
 
 ```bash
-npx @bellhop-marketing/mcp-install                 # interactive — pick your clients
+npx @bellhop-marketing/mcp-install                 # interactive — pick clients + skills
 npx @bellhop-marketing/mcp-install --all --yes     # configure everything, no prompts
-npx @bellhop-marketing/mcp-install --client cursor # just Cursor
+npx @bellhop-marketing/mcp-install --client cursor # just Cursor (MCP only)
+npx @bellhop-marketing/mcp-install --skills        # MCP + skills, skip the skills prompt
 npx @bellhop-marketing/mcp-install --print --all   # preview the config changes first
+npx @bellhop-marketing/mcp-install --uninstall     # remove Bellhop config + skills
 ```
+
+## Bellhop Skills
+
+[Bellhop skills](https://github.com/DialogueConsulting/bellhop-skills) are opinionated, model-triggered workflows that drive the Bellhop MCP tools — build an intent map, find the safe zones to personalize, draft grounded copy, QA it before publish, run experiments, report results. When Claude Code is among your targets, the installer offers to install them:
+
+```
+Install the Bellhop skills into ~/.claude/skills? [Y/n]
+```
+
+Say yes (or pass `--skills`) and the skills land in `~/.claude/skills/bellhop-*`. An existing `bellhop-*` skill is backed up to `<name>.bak` before being replaced; no other skill is touched.
+
+- **Claude Code / claude.ai only.** Skills are a Claude Code construct — Cursor and Claude Desktop get the MCP server only, so the installer skips skills for them.
+- **How it works.** The installer fetches the public [`bellhop-skills`](https://github.com/DialogueConsulting/bellhop-skills) repo tarball and unpacks it with the `tar` that ships on macOS, Linux, and Windows 10+. Still zero npm dependencies.
+- **Prefer to manage it yourself?** Add the repo as a Claude Code plugin marketplace instead:
+
+  ```
+  /plugin marketplace add DialogueConsulting/bellhop-skills
+  /plugin install bellhop-skills
+  ```
 
 ## After installing
 
@@ -75,12 +99,16 @@ For Cursor, add to `~/.cursor/mcp.json`:
 
 ## Uninstall
 
-Remove the `bellhop` entry from the relevant config file (or restore the `.bak` the installer left next to it), then restart the client. Revoke the client's token in **Bellhop → Settings → MCP**.
+```bash
+npx @bellhop-marketing/mcp-install --uninstall
+```
+
+This removes the `bellhop` MCP entry from each detected client's config (backing it up to `.bak` first) and deletes the `bellhop-*` skills from `~/.claude/skills`. You can scope it with `--client <id>` and preview it with `--print`. Then restart the client and revoke its token in **Bellhop → Settings → MCP**. To undo by hand instead, restore the `.bak` the installer left next to each config file.
 
 ## Notes
 
-- **Zero runtime dependencies.** Node ≥ 18, built-ins only.
-- **No telemetry.** The installer only reads and writes local config files.
+- **Zero runtime dependencies.** Node ≥ 18, built-ins only (skills install uses the system `tar`).
+- **No telemetry.** The installer only reads and writes local config files and fetches the public skills tarball when you opt in.
 
 ## License
 
