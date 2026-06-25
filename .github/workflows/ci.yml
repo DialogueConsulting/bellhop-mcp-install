@@ -15,5 +15,7 @@ jobs:
           node-version: 20
       - name: Syntax check
         run: node --check bin/install.js
+      - name: Unit tests
+        run: npm test
       - name: Dry-run smoke (all clients)
         run: node bin/install.js --print --all

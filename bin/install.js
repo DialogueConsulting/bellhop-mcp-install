@@ -84,7 +84,8 @@ const CLIENTS = {
     detect: () =>
       fs.existsSync(path.join(HOME, '.claude.json')) || fs.existsSync(path.join(HOME, '.claude')),
     next: (name) =>
-      `Restart Claude Code, then run ${cyan('/mcp')} and approve the browser sign-in for "${name}".`,
+      `Restart Claude Code → run ${cyan('/mcp')} → select "${name}" → ${bold('Authenticate')} (a browser opens). ` +
+      `Tools appear only ${bold('after')} sign-in — "Connected" alone is not enough.`,
   },
   cursor: {
     label: 'Cursor',
@@ -269,6 +270,79 @@ function removeMcpEntry(clientId, opts) {
   return { clientId, file, action: 'remove', backedUp: true };
 }
 
+// ── Claude Code via its own CLI (the supported path) ────────────────────────
+// Hand-merging ~/.claude.json works, but Claude Code rewrites that large,
+// stateful file itself — editing it while Claude Code is running can clobber our
+// entry. `claude mcp add` writes through Claude Code's own safe writer, normalizes
+// the entry, and reliably arms the /mcp OAuth prompt. We prefer it and keep the
+// JSON merge as a fallback for machines without the CLI.
+function claudeCliAvailable() {
+  try {
+    execFileSync('claude', ['--version'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function configureClaudeCodeViaCli(opts) {
+  const file = CLIENTS['claude-code'].configPath();
+  const addArgs = ['mcp', 'add', '--transport', 'http', '--scope', 'user', opts.name, opts.url];
+  if (opts.dryRun) {
+    return { clientId: 'claude-code', file, method: 'cli', action: 'add', preview: `claude ${addArgs.join(' ')}` };
+  }
+  // Idempotent: drop any prior entry first so `add` can't fail with "already exists".
+  try {
+    execFileSync('claude', ['mcp', 'remove', '--scope', 'user', opts.name], { stdio: 'ignore' });
+  } catch {
+    /* not present — fine */
+  }
+  execFileSync('claude', addArgs, { stdio: 'ignore' });
+  return { clientId: 'claude-code', file, method: 'cli', action: 'add' };
+}
+
+// Resolve the Claude Code apply strategy: CLI when available, JSON merge otherwise
+// (or when the CLI errors). Always tags the result with `method` for reporting.
+function applyClaudeCode(opts) {
+  if (claudeCliAvailable()) {
+    try {
+      return configureClaudeCodeViaCli(opts);
+    } catch (err) {
+      const fallback = configure('claude-code', opts);
+      fallback.method = 'json';
+      fallback.cliError = err && err.message ? err.message : String(err);
+      return fallback;
+    }
+  }
+  const json = configure('claude-code', opts);
+  json.method = 'json';
+  return json;
+}
+
+function removeClaudeCodeViaCli(opts) {
+  const file = CLIENTS['claude-code'].configPath();
+  if (opts.dryRun) return { clientId: 'claude-code', file, method: 'cli', action: 'remove' };
+  try {
+    execFileSync('claude', ['mcp', 'remove', '--scope', 'user', opts.name], { stdio: 'ignore' });
+    return { clientId: 'claude-code', file, method: 'cli', action: 'remove' };
+  } catch {
+    // Nothing registered under that scope — treat as absent rather than an error.
+    return { clientId: 'claude-code', file, method: 'cli', action: 'absent' };
+  }
+}
+
+// `claude mcp get <name>` after install. "Connected" here means reachable, NOT
+// signed in — bellhop's tools only appear once OAuth completes via /mcp.
+function verifyClaudeCode(opts) {
+  try {
+    const out = execFileSync('claude', ['mcp', 'get', opts.name], { encoding: 'utf8' });
+    return { ok: true, out: out.trim() };
+  } catch (err) {
+    const msg = (err && (err.stdout || err.message)) || String(err);
+    return { ok: false, out: String(msg).trim() };
+  }
+}
+
 // ── arg parsing ─────────────────────────────────────────────────────────────
 function parseArgs(argv) {
   const opts = {
@@ -281,6 +355,7 @@ function parseArgs(argv) {
     help: false,
     skills: undefined, // tri-state: undefined = ask, true = force, false = skip
     uninstall: false,
+    verify: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -291,6 +366,7 @@ function parseArgs(argv) {
     else if (a === '--skills') opts.skills = true;
     else if (a === '--no-skills') opts.skills = false;
     else if (a === '--uninstall') opts.uninstall = true;
+    else if (a === '--verify') opts.verify = true;
     else if (a === '--url') opts.url = argv[++i];
     else if (a === '--name') opts.name = argv[++i];
     else if (a === '--client') opts.clients.push(argv[++i]);
@@ -321,6 +397,7 @@ ${bold('Options')}
   --skills        Also install the Bellhop skills into ~/.claude/skills (no prompt).
   --no-skills     Skip the Bellhop skills install.
   --uninstall     Remove the Bellhop MCP entry and the bellhop-* skills.
+  --verify        After install, run \`claude mcp get\` and report the status.
   --url <url>     Override the MCP endpoint (default: ${DEFAULT_URL}).
   --name <name>   Override the server key written to config (default: ${DEFAULT_NAME}).
   --help, -h      Show this help.
@@ -331,11 +408,25 @@ ${bold('Examples')}
   npx @bellhop-marketing/mcp-install --client cursor
   npx @bellhop-marketing/mcp-install --skills        # MCP + skills, no skills prompt
   npx @bellhop-marketing/mcp-install --print --all   # preview the config changes
+  npx @bellhop-marketing/mcp-install --verify        # install, then check it registered
   npx @bellhop-marketing/mcp-install --uninstall     # remove Bellhop config + skills
 
 Each client signs in to Bellhop over OAuth on first use — no API key to paste.
+For Claude Code the installer uses ${cyan('claude mcp add')} when the CLI is present
+(falling back to editing ${cyan('~/.claude.json')} directly).
 ${bold('Bellhop Skills')} are a Claude Code / claude.ai feature (Cursor and Claude
-Desktop get the MCP server only). They install into ${cyan('~/.claude/skills/bellhop-*')}.`);
+Desktop get the MCP server only). They install into ${cyan('~/.claude/skills/bellhop-*')}.
+
+${bold('Troubleshooting')}
+  ${yellow('"Connected" but no Bellhop tools show up?')} That means the server is
+  reachable but you haven't ${bold('signed in')} yet — they are two different things.
+  Bellhop is OAuth-protected, so its tools only appear ${bold('after')} you complete
+  the browser sign-in. In Claude Code: run ${cyan('/mcp')}, select "${DEFAULT_NAME}",
+  choose ${bold('Authenticate')}, finish the browser flow, then the tools load.
+  If ${cyan('/mcp')} shows no Authenticate action, reset the entry and retry:
+    ${cyan(`claude mcp remove ${DEFAULT_NAME} -s user`)}
+    ${cyan(`claude mcp add --transport http --scope user ${DEFAULT_NAME} ${DEFAULT_URL}`)}
+  then fully restart Claude Code and run ${cyan('/mcp')} → Authenticate.`);
 }
 
 // ── interactive picker ──────────────────────────────────────────────────────
@@ -417,7 +508,10 @@ async function main() {
   if (opts.uninstall) {
     let targets = [...new Set(opts.clients)];
     if (!targets.length) targets = detected.length ? detected : CLIENT_IDS.slice();
-    const mcpResults = targets.map((id) => removeMcpEntry(id, opts));
+    const cliReady = claudeCliAvailable();
+    const mcpResults = targets.map((id) =>
+      id === 'claude-code' && cliReady ? removeClaudeCodeViaCli(opts) : removeMcpEntry(id, opts),
+    );
 
     if (opts.dryRun) {
       console.log(bold('\nDry run — nothing removed.\n'));
@@ -455,11 +549,12 @@ async function main() {
     return;
   }
 
-  // Apply.
+  // Apply. Claude Code goes through its own CLI when available; the other clients
+  // (Cursor file, Claude Desktop mcp-remote bridge) have no CLI equivalent.
   const results = [];
   for (const id of targets) {
     try {
-      results.push(configure(id, opts));
+      results.push(id === 'claude-code' ? applyClaudeCode(opts) : { ...configure(id, opts), method: 'json' });
     } catch (err) {
       results.push({ clientId: id, error: err && err.message ? err.message : String(err) });
     }
@@ -476,8 +571,9 @@ async function main() {
         console.log(`${red('✗')} ${CLIENTS[r.clientId].label}: ${r.error}`);
         continue;
       }
-      console.log(`${cyan('→')} ${bold(CLIENTS[r.clientId].label)} ${dim('·')} ${r.file} ${dim(`(${r.action})`)}`);
-      console.log(r.preview.replace(/^/gm, '    '));
+      const via = r.method === 'cli' ? dim(' via claude CLI') : '';
+      console.log(`${cyan('→')} ${bold(CLIENTS[r.clientId].label)} ${dim('·')} ${r.file} ${dim(`(${r.action})`)}${via}`);
+      console.log((r.method === 'cli' ? cyan(`$ ${r.preview}`) : r.preview).replace(/^/gm, '    '));
     }
     const wouldSkills = opts.skills === false ? false : opts.skills === true || skillsRelevant;
     if (wouldSkills) {
@@ -499,11 +595,15 @@ async function main() {
       continue;
     }
     ok++;
-    const note = r.parseFailed
-      ? yellow(' (previous config was unreadable — backed up to .bak and rewritten)')
-      : r.backedUp
-        ? dim(' (backup: .bak)')
-        : '';
+    const note = r.cliError
+      ? yellow(` (claude CLI failed: ${r.cliError} — wrote config directly instead; backup: .bak)`)
+      : r.method === 'cli'
+        ? dim(' (via claude CLI)')
+        : r.parseFailed
+          ? yellow(' (previous config was unreadable — backed up to .bak and rewritten)')
+          : r.backedUp
+            ? dim(' (backup: .bak)')
+            : '';
     console.log(`${green('✓')} ${bold(CLIENTS[r.clientId].label)} ${dim('·')} ${r.file} ${dim(`[${r.action}]`)}${note}`);
   }
 
@@ -538,6 +638,24 @@ async function main() {
     }
   } else if (skillsRelevant && opts.skills === false) {
     console.log(dim('\nSkipped Bellhop skills (--no-skills).'));
+  }
+
+  // ── optional verification ──────────────────────────────────────────────────
+  const ccConfigured = results.some((r) => !r.error && r.clientId === 'claude-code');
+  if (opts.verify && ccConfigured && claudeCliAvailable()) {
+    console.log(bold('\nVerifying Claude Code registration…'));
+    const v = verifyClaudeCode(opts);
+    if (v.ok) {
+      console.log(v.out.replace(/^/gm, '  '));
+      console.log(
+        yellow(
+          `\n  Note: "Connected" means reachable, ${bold('not signed in')}. Bellhop's tools appear`,
+        ),
+      );
+      console.log(yellow(`  only after you complete the OAuth sign-in — run ${cyan('/mcp')} → Authenticate.`));
+    } else {
+      console.log(yellow(`  Could not read status via \`claude mcp get ${opts.name}\`: ${v.out}`));
+    }
   }
 
   if (ok) {
