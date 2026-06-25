@@ -1,7 +1,11 @@
 name: publish
 
 # Publishes to npm when a GitHub Release is published.
-# Requires an NPM_TOKEN secret with publish rights to the @bellhop-marketing scope.
+#
+# Uses npm Trusted Publishing (OIDC) — no NPM_TOKEN secret. Trust is configured
+# on npmjs.com for @bellhop-marketing/mcp-install against this repo + workflow.
+# Requires npm >= 11.5.1 and `id-token: write`; provenance is attached
+# automatically.
 on:
   release:
     types: [published]
@@ -11,14 +15,16 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      id-token: write # npm provenance
+      id-token: write # OIDC token for trusted publishing + provenance
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           registry-url: https://registry.npmjs.org
-      - run: node --check bin/install.js
-      - run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+      - name: Upgrade npm for trusted publishing
+        run: npm install -g npm@latest
+      - name: Syntax check
+        run: node --check bin/install.js
+      - name: Publish
+        run: npm publish --access public
