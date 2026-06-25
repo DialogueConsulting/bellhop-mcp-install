@@ -17,11 +17,39 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const https = require('https');
 const readline = require('readline');
+const { execFileSync } = require('child_process');
 
 const DEFAULT_URL = 'https://app.bellhop.marketing/mcp';
 const DEFAULT_NAME = 'bellhop';
 const HOME = os.homedir();
+
+// ── Bellhop Skills (Claude Code / claude.ai only) ───────────────────────────
+// Skills are model-triggered, file-based workflows that drive the Bellhop MCP
+// tools. They live in ~/.claude/skills/ and are a Claude Code construct — Cursor
+// and Claude Desktop get the MCP server only. We fetch the public repo tarball
+// at runtime (Node `https` + the shell `tar` that ships on macOS/Linux/Win10+),
+// keeping the zero-runtime-dependency promise.
+const SKILLS_TARBALL =
+  'https://github.com/DialogueConsulting/bellhop-skills/archive/refs/heads/main.tar.gz';
+const SKILLS_DIR = path.join(HOME, '.claude', 'skills');
+const SKILL_PREFIX = 'bellhop-';
+// Indicative list for dry-run previews only — a real install copies whatever the
+// published tarball actually contains, so this never goes stale in a harmful way.
+const EXPECTED_SKILLS = [
+  'intent-map-builder',
+  'zone-discovery-auditor',
+  'grounded-variant-generator',
+  'preview-citation-qa',
+  'knowledge-freshness-watcher',
+  'experiment-planner',
+  'performance-analyst',
+  'crm-alert-composer',
+  'executive-roi-narrator',
+  'privacy-consent-guardrail',
+  'agency-orchestrator',
+].map((s) => SKILL_PREFIX + s);
 
 // ── tiny ANSI helpers (disabled when not a TTY or NO_COLOR is set) ──────────
 const useColor = process.stdout.isTTY && !process.env.NO_COLOR;
@@ -128,6 +156,119 @@ function configure(clientId, opts) {
   return { clientId, file, action: existed ? 'update' : 'add', backedUp, parseFailed };
 }
 
+// ── Bellhop Skills install / uninstall ──────────────────────────────────────
+function httpGetBuffer(url, redirects = 0) {
+  return new Promise((resolve, reject) => {
+    if (redirects > 5) return reject(new Error('too many redirects'));
+    https
+      .get(url, { headers: { 'User-Agent': 'bellhop-mcp-install' } }, (res) => {
+        const { statusCode, headers } = res;
+        if (statusCode >= 300 && statusCode < 400 && headers.location) {
+          res.resume();
+          return resolve(httpGetBuffer(new URL(headers.location, url).toString(), redirects + 1));
+        }
+        if (statusCode !== 200) {
+          res.resume();
+          return reject(new Error(`GET ${url} → HTTP ${statusCode}`));
+        }
+        const chunks = [];
+        res.on('data', (c) => chunks.push(c));
+        res.on('end', () => resolve(Buffer.concat(chunks)));
+        res.on('error', reject);
+      })
+      .on('error', reject);
+  });
+}
+
+/**
+ * Download the published skills, then copy every skills/bellhop-* directory into
+ * ~/.claude/skills/. Idempotent: an existing bellhop-* dir is moved aside to
+ * <dir>.bak before being replaced; no non-bellhop skill is ever touched.
+ */
+async function installSkills() {
+  const buf = await httpGetBuffer(SKILLS_TARBALL);
+  // GitHub serves a 200 HTML soft-404 when a repo has no commits on the branch.
+  // A real gzip archive starts with the magic bytes 1f 8b — bail clearly if not.
+  if (buf.length < 2 || buf[0] !== 0x1f || buf[1] !== 0x8b) {
+    throw new Error(
+      'the download was not a gzip archive — the bellhop-skills repo may be empty or not yet published',
+    );
+  }
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'bellhop-skills-'));
+  try {
+    const tarball = path.join(tmp, 'skills.tar.gz');
+    const extractDir = path.join(tmp, 'extract');
+    fs.writeFileSync(tarball, buf);
+    fs.mkdirSync(extractDir);
+    try {
+      execFileSync('tar', ['-xzf', tarball, '-C', extractDir], { stdio: 'ignore' });
+    } catch (e) {
+      throw new Error(`could not extract the skills archive (is \`tar\` available?): ${e.message}`);
+    }
+    const top = fs.readdirSync(extractDir)[0]; // bellhop-skills-main
+    const skillsParent = path.join(extractDir, top, 'skills');
+    if (!fs.existsSync(skillsParent)) throw new Error('archive had no skills/ directory');
+
+    const dirs = fs
+      .readdirSync(skillsParent)
+      .filter(
+        (d) =>
+          d.startsWith(SKILL_PREFIX) && fs.statSync(path.join(skillsParent, d)).isDirectory(),
+      );
+
+    fs.mkdirSync(SKILLS_DIR, { recursive: true });
+    const installed = [];
+    for (const name of dirs) {
+      const dest = path.join(SKILLS_DIR, name);
+      let backedUp = false;
+      if (fs.existsSync(dest)) {
+        fs.rmSync(dest + '.bak', { recursive: true, force: true });
+        fs.renameSync(dest, dest + '.bak');
+        backedUp = true;
+      }
+      fs.cpSync(path.join(skillsParent, name), dest, { recursive: true });
+      installed.push({ name, backedUp });
+    }
+    return { installed };
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+/** Remove every bellhop-* skill directory (leaving any *.bak undo copies). */
+function uninstallSkills() {
+  if (!fs.existsSync(SKILLS_DIR)) return { removed: [] };
+  const removed = [];
+  for (const d of fs.readdirSync(SKILLS_DIR)) {
+    if (!d.startsWith(SKILL_PREFIX) || d.endsWith('.bak')) continue;
+    if (!fs.statSync(path.join(SKILLS_DIR, d)).isDirectory()) continue;
+    fs.rmSync(path.join(SKILLS_DIR, d), { recursive: true, force: true });
+    removed.push(d);
+  }
+  return { removed };
+}
+
+/** Remove the Bellhop MCP server entry from one client's config. */
+function removeMcpEntry(clientId, opts) {
+  const client = CLIENTS[clientId];
+  const file = client.configPath();
+  if (!fs.existsSync(file)) return { clientId, file, action: 'absent' };
+  let config;
+  try {
+    config = readJson(file);
+  } catch {
+    return { clientId, file, action: 'unreadable' };
+  }
+  const had =
+    config && config.mcpServers && Object.prototype.hasOwnProperty.call(config.mcpServers, opts.name);
+  if (!had) return { clientId, file, action: 'absent' };
+  if (opts.dryRun) return { clientId, file, action: 'remove' };
+  delete config.mcpServers[opts.name];
+  fs.copyFileSync(file, file + '.bak');
+  fs.writeFileSync(file, JSON.stringify(config, null, 2) + '\n');
+  return { clientId, file, action: 'remove', backedUp: true };
+}
+
 // ── arg parsing ─────────────────────────────────────────────────────────────
 function parseArgs(argv) {
   const opts = {
@@ -138,6 +279,8 @@ function parseArgs(argv) {
     yes: false,
     dryRun: false,
     help: false,
+    skills: undefined, // tri-state: undefined = ask, true = force, false = skip
+    uninstall: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -145,6 +288,9 @@ function parseArgs(argv) {
     else if (a === '--yes' || a === '-y') opts.yes = true;
     else if (a === '--print' || a === '--dry-run') opts.dryRun = true;
     else if (a === '--help' || a === '-h') opts.help = true;
+    else if (a === '--skills') opts.skills = true;
+    else if (a === '--no-skills') opts.skills = false;
+    else if (a === '--uninstall') opts.uninstall = true;
     else if (a === '--url') opts.url = argv[++i];
     else if (a === '--name') opts.name = argv[++i];
     else if (a === '--client') opts.clients.push(argv[++i]);
@@ -172,17 +318,24 @@ ${bold('Options')}
   --all           Configure every supported client.
   --yes, -y       Non-interactive: use detected clients (or all) without prompting.
   --print         Dry run — show what would be written, change nothing.
+  --skills        Also install the Bellhop skills into ~/.claude/skills (no prompt).
+  --no-skills     Skip the Bellhop skills install.
+  --uninstall     Remove the Bellhop MCP entry and the bellhop-* skills.
   --url <url>     Override the MCP endpoint (default: ${DEFAULT_URL}).
   --name <name>   Override the server key written to config (default: ${DEFAULT_NAME}).
   --help, -h      Show this help.
 
 ${bold('Examples')}
-  npx @bellhop-marketing/mcp-install                 # interactive — pick your clients
+  npx @bellhop-marketing/mcp-install                 # interactive — pick clients + skills
   npx @bellhop-marketing/mcp-install --all --yes     # configure everything, no prompts
   npx @bellhop-marketing/mcp-install --client cursor
+  npx @bellhop-marketing/mcp-install --skills        # MCP + skills, no skills prompt
   npx @bellhop-marketing/mcp-install --print --all   # preview the config changes
+  npx @bellhop-marketing/mcp-install --uninstall     # remove Bellhop config + skills
 
-Each client signs in to Bellhop over OAuth on first use — no API key to paste.`);
+Each client signs in to Bellhop over OAuth on first use — no API key to paste.
+${bold('Bellhop Skills')} are a Claude Code / claude.ai feature (Cursor and Claude
+Desktop get the MCP server only). They install into ${cyan('~/.claude/skills/bellhop-*')}.`);
 }
 
 // ── interactive picker ──────────────────────────────────────────────────────
@@ -217,6 +370,18 @@ function promptSelect(detected) {
   });
 }
 
+function promptYesNo(question, defaultYes = true) {
+  return new Promise((resolve) => {
+    const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+    rl.question(`\n${question} ${defaultYes ? '[Y/n]' : '[y/N]'} `, (answer) => {
+      rl.close();
+      const a = (answer || '').trim().toLowerCase();
+      if (!a) return resolve(defaultYes);
+      resolve(a === 'y' || a === 'yes');
+    });
+  });
+}
+
 function safeDetect(id) {
   try {
     return CLIENTS[id].detect();
@@ -245,11 +410,41 @@ async function main() {
   console.log(bold('\n🛎  Bellhop MCP installer'));
   console.log(dim(`   endpoint: ${opts.url}`));
 
+  const detected = CLIENT_IDS.filter(safeDetect);
+  const interactive = process.stdin.isTTY && process.stdout.isTTY;
+
+  // ── uninstall path ──────────────────────────────────────────────────────
+  if (opts.uninstall) {
+    let targets = [...new Set(opts.clients)];
+    if (!targets.length) targets = detected.length ? detected : CLIENT_IDS.slice();
+    const mcpResults = targets.map((id) => removeMcpEntry(id, opts));
+
+    if (opts.dryRun) {
+      console.log(bold('\nDry run — nothing removed.\n'));
+      for (const r of mcpResults) {
+        console.log(`${cyan('→')} ${bold(CLIENTS[r.clientId].label)} ${dim('·')} ${r.file} ${dim(`(${r.action})`)}`);
+      }
+      const present = fs.existsSync(SKILLS_DIR)
+        ? fs.readdirSync(SKILLS_DIR).filter((d) => d.startsWith(SKILL_PREFIX) && !d.endsWith('.bak'))
+        : [];
+      console.log(`${cyan('→')} skills ${dim('·')} ${SKILLS_DIR} ${dim(`(would remove ${present.length})`)}`);
+      return;
+    }
+
+    console.log('');
+    for (const r of mcpResults) {
+      const verb = r.action === 'remove' ? green('removed') : dim(r.action);
+      console.log(`  ${dim('•')} ${CLIENTS[r.clientId].label}: MCP entry ${verb}`);
+    }
+    const { removed } = uninstallSkills();
+    console.log(`  ${dim('•')} Skills: removed ${green(String(removed.length))} bellhop-* skill(s) from ${SKILLS_DIR}`);
+    console.log(bold('\nUninstalled.'));
+    return;
+  }
+
   // Resolve the target client set.
   let targets = [...new Set(opts.clients)];
   if (!targets.length) {
-    const detected = CLIENT_IDS.filter(safeDetect);
-    const interactive = process.stdin.isTTY && process.stdout.isTTY;
     if (opts.all) targets = CLIENT_IDS.slice();
     else if (opts.yes || !interactive) targets = detected.length ? detected : CLIENT_IDS.slice();
     else targets = await promptSelect(detected);
@@ -270,6 +465,9 @@ async function main() {
     }
   }
 
+  // Decide whether to install skills (Claude Code / claude.ai only).
+  const skillsRelevant = targets.includes('claude-code') || detected.includes('claude-code');
+
   // Report.
   if (opts.dryRun) {
     console.log(bold('\nDry run — no files written.\n'));
@@ -280,6 +478,15 @@ async function main() {
       }
       console.log(`${cyan('→')} ${bold(CLIENTS[r.clientId].label)} ${dim('·')} ${r.file} ${dim(`(${r.action})`)}`);
       console.log(r.preview.replace(/^/gm, '    '));
+    }
+    const wouldSkills = opts.skills === false ? false : opts.skills === true || skillsRelevant;
+    if (wouldSkills) {
+      console.log(`${cyan('→')} ${bold('Bellhop Skills')} ${dim('·')} ${SKILLS_DIR}${path.sep}${SKILL_PREFIX}*`);
+      console.log(dim(`    source: ${SKILLS_TARBALL}`));
+      console.log(EXPECTED_SKILLS.map((s) => `    ${s}`).join('\n'));
+      console.log(dim(`    (${EXPECTED_SKILLS.length} skills in the published set; actual install copies the tarball contents)`));
+    } else {
+      console.log(`${cyan('→')} ${dim('Bellhop Skills: skipped (Claude Code not targeted, or --no-skills)')}`);
     }
     return;
   }
@@ -298,6 +505,39 @@ async function main() {
         ? dim(' (backup: .bak)')
         : '';
     console.log(`${green('✓')} ${bold(CLIENTS[r.clientId].label)} ${dim('·')} ${r.file} ${dim(`[${r.action}]`)}${note}`);
+  }
+
+  // ── Bellhop Skills ────────────────────────────────────────────────────────
+  let doSkills;
+  if (opts.skills === false) doSkills = false;
+  else if (opts.skills === true) doSkills = true;
+  else if (!skillsRelevant) doSkills = false; // Cursor/Desktop only — skills don't apply
+  else if (opts.yes || !interactive) doSkills = true;
+  else doSkills = await promptYesNo(`Install the Bellhop skills into ${cyan('~/.claude/skills')}?`);
+
+  if (doSkills) {
+    process.stdout.write(dim('\nFetching Bellhop skills… '));
+    try {
+      const { installed } = await installSkills();
+      console.log(green('done'));
+      const backed = installed.filter((s) => s.backedUp).length;
+      console.log(
+        `${green('✓')} ${bold('Bellhop Skills')} ${dim('·')} installed ${green(String(installed.length))} into ${SKILLS_DIR}${
+          backed ? dim(` (${backed} replaced; .bak kept)`) : ''
+        }`,
+      );
+      console.log(dim('   Skills trigger automatically in Claude Code — e.g. "build an intent map for my site".'));
+    } catch (err) {
+      console.log(red('failed'));
+      console.log(
+        yellow(`   Couldn't install skills automatically: ${err && err.message ? err.message : err}`),
+      );
+      console.log(dim('   Install them manually as a Claude Code plugin:'));
+      console.log(cyan('     /plugin marketplace add DialogueConsulting/bellhop-skills'));
+      console.log(cyan('     /plugin install bellhop-skills'));
+    }
+  } else if (skillsRelevant && opts.skills === false) {
+    console.log(dim('\nSkipped Bellhop skills (--no-skills).'));
   }
 
   if (ok) {
